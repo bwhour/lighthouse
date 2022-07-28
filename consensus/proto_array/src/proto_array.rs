@@ -16,6 +16,7 @@ four_byte_option_impl!(four_byte_option_usize, usize);
 four_byte_option_impl!(four_byte_option_checkpoint, Checkpoint);
 
 /// Defines an operation which may invalidate the `execution_status` of some nodes.
+#[derive(Clone)]
 pub enum InvalidationOperation {
     /// Invalidate only `block_root` and it's descendants. Don't invalidate any ancestors.
     InvalidateOne { block_root: Hash256 },
@@ -240,7 +241,7 @@ impl ProtoArray {
                 // not exist.
                 node.weight = node
                     .weight
-                    .checked_sub(node_delta.abs() as u64)
+                    .checked_sub(node_delta.unsigned_abs())
                     .ok_or(Error::DeltaOverflow(node_index))?;
             } else {
                 node.weight = node
@@ -387,7 +388,7 @@ impl ProtoArray {
                 ExecutionStatus::Irrelevant(_) => return Ok(()),
                 // The block has an unknown status, set it to valid since any ancestor of a valid
                 // payload can be considered valid.
-                ExecutionStatus::Unknown(payload_block_hash) => {
+                ExecutionStatus::Optimistic(payload_block_hash) => {
                     node.execution_status = ExecutionStatus::Valid(payload_block_hash);
                     if let Some(parent_index) = node.parent {
                         parent_index
@@ -458,7 +459,7 @@ impl ProtoArray {
             match node.execution_status {
                 ExecutionStatus::Valid(hash)
                 | ExecutionStatus::Invalid(hash)
-                | ExecutionStatus::Unknown(hash) => {
+                | ExecutionStatus::Optimistic(hash) => {
                     // If we're no longer processing the `head_block_root` and the last valid
                     // ancestor is unknown, exit this loop and proceed to invalidate and
                     // descendants of `head_block_root`/`latest_valid_ancestor_root`.
@@ -490,9 +491,6 @@ impl ProtoArray {
                             node.best_descendant = None
                         }
 
-                        // It might be new knowledge that this block is valid, ensure that it and all
-                        // ancestors are marked as valid.
-                        self.propagate_execution_payload_validation_by_index(index)?;
                         break;
                     }
                 }
@@ -516,7 +514,7 @@ impl ProtoArray {
                             payload_block_hash: *hash,
                         })
                     }
-                    ExecutionStatus::Unknown(hash) => {
+                    ExecutionStatus::Optimistic(hash) => {
                         invalidated_indices.insert(index);
                         node.execution_status = ExecutionStatus::Invalid(*hash);
 
@@ -580,7 +578,7 @@ impl ProtoArray {
                                 payload_block_hash: *hash,
                             })
                         }
-                        ExecutionStatus::Unknown(hash) | ExecutionStatus::Invalid(hash) => {
+                        ExecutionStatus::Optimistic(hash) | ExecutionStatus::Invalid(hash) => {
                             node.execution_status = ExecutionStatus::Invalid(*hash)
                         }
                         ExecutionStatus::Irrelevant(_) => {

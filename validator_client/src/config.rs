@@ -1,8 +1,7 @@
-use crate::fee_recipient_file::FeeRecipientFile;
 use crate::graffiti_file::GraffitiFile;
 use crate::{http_api, http_metrics};
 use clap::ArgMatches;
-use clap_utils::{parse_optional, parse_required};
+use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 use directory::{
     get_network_dir, DEFAULT_HARDCODED_NETWORK, DEFAULT_ROOT_DIR, DEFAULT_SECRET_DIR,
     DEFAULT_VALIDATOR_DIR,
@@ -44,8 +43,6 @@ pub struct Config {
     pub graffiti_file: Option<GraffitiFile>,
     /// Fallback fallback address.
     pub fee_recipient: Option<Address>,
-    /// Fee recipient file to load per validator suggested-fee-recipients.
-    pub fee_recipient_file: Option<FeeRecipientFile>,
     /// Configuration for the HTTP REST API.
     pub http_api: http_api::Config,
     /// Configuration for the HTTP REST API.
@@ -86,7 +83,6 @@ impl Default for Config {
             graffiti: None,
             graffiti_file: None,
             fee_recipient: None,
-            fee_recipient_file: None,
             http_api: <_>::default(),
             http_metrics: <_>::default(),
             monitoring_api: None,
@@ -206,19 +202,6 @@ impl Config {
             }
         }
 
-        if let Some(fee_recipient_file_path) = cli_args.value_of("suggested-fee-recipient-file") {
-            let mut fee_recipient_file = FeeRecipientFile::new(fee_recipient_file_path.into());
-            fee_recipient_file
-                .read_fee_recipient_file()
-                .map_err(|e| format!("Error reading suggested-fee-recipient file: {:?}", e))?;
-            config.fee_recipient_file = Some(fee_recipient_file);
-            info!(
-                log,
-                "Successfully loaded suggested-fee-recipient file";
-                "path" => fee_recipient_file_path
-            );
-        }
-
         if let Some(input_fee_recipient) =
             parse_optional::<Address>(cli_args, "suggested-fee-recipient")?
         {
@@ -293,6 +276,11 @@ impl Config {
 
             config.http_metrics.allow_origin = Some(allow_origin.to_string());
         }
+
+        if cli_args.is_present(DISABLE_MALLOC_TUNING_FLAG) {
+            config.http_metrics.allocator_metrics_enabled = false;
+        }
+
         /*
          * Explorer metrics
          */

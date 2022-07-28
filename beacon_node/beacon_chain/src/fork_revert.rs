@@ -48,7 +48,7 @@ pub fn revert_to_fork_boundary<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
     );
     let block_iter = ParentRootBlockIterator::fork_tolerant(&store, head_block_root);
 
-    process_results(block_iter, |mut iter| {
+    let (block_root, blinded_block) = process_results(block_iter, |mut iter| {
         iter.find_map(|(block_root, block)| {
             if block.slot() < fork_epoch.start_slot(E::slots_per_epoch()) {
                 Some((block_root, block))
@@ -69,7 +69,13 @@ pub fn revert_to_fork_boundary<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
             e, CORRUPT_DB_MESSAGE
         )
     })?
-    .ok_or_else(|| format!("No pre-fork blocks found. {}", CORRUPT_DB_MESSAGE))
+    .ok_or_else(|| format!("No pre-fork blocks found. {}", CORRUPT_DB_MESSAGE))?;
+
+    let block = store
+        .make_full_block(&block_root, blinded_block)
+        .map_err(|e| format!("Unable to add payload to new head block: {:?}", e))?;
+
+    Ok((block_root, block))
 }
 
 /// Reset fork choice to the finalized checkpoint of the supplied head state.
@@ -91,13 +97,14 @@ pub fn reset_fork_choice_to_finalization<E: EthSpec, Hot: ItemStore<E>, Cold: It
     head_block_root: Hash256,
     head_state: &BeaconState<E>,
     store: Arc<HotColdDB<E, Hot, Cold>>,
+    current_slot: Option<Slot>,
     spec: &ChainSpec,
 ) -> Result<ForkChoice<BeaconForkChoiceStore<E, Hot, Cold>, E>, String> {
     // Fetch finalized block.
     let finalized_checkpoint = head_state.finalized_checkpoint();
     let finalized_block_root = finalized_checkpoint.root;
     let finalized_block = store
-        .get_block(&finalized_block_root)
+        .get_full_block(&finalized_block_root)
         .map_err(|e| format!("Error loading finalized block: {:?}", e))?
         .ok_or_else(|| {
             format!(
@@ -132,7 +139,7 @@ pub fn reset_fork_choice_to_finalization<E: EthSpec, Hot: ItemStore<E>, Cold: It
     })?;
     let finalized_snapshot = BeaconSnapshot {
         beacon_block_root: finalized_block_root,
-        beacon_block: finalized_block,
+        beacon_block: Arc::new(finalized_block),
         beacon_state: finalized_state,
     };
 
@@ -143,6 +150,8 @@ pub fn reset_fork_choice_to_finalization<E: EthSpec, Hot: ItemStore<E>, Cold: It
         finalized_block_root,
         &finalized_snapshot.beacon_block,
         &finalized_snapshot.beacon_state,
+        current_slot,
+        spec,
     )
     .map_err(|e| format!("Unable to reset fork choice for revert: {:?}", e))?;
 
@@ -172,13 +181,12 @@ pub fn reset_fork_choice_to_finalization<E: EthSpec, Hot: ItemStore<E>, Cold: It
         // retro-actively determine if they were valid or not.
         //
         // This scenario is so rare that it seems OK to double-verify some blocks.
-        let payload_verification_status = PayloadVerificationStatus::NotVerified;
+        let payload_verification_status = PayloadVerificationStatus::Optimistic;
 
-        let (block, _) = block.deconstruct();
         fork_choice
             .on_block(
                 block.slot(),
-                &block,
+                block.message(),
                 block.canonical_root(),
                 // Reward proposer boost. We are reinforcing the canonical chain.
                 Duration::from_secs(0),

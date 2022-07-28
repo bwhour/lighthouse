@@ -36,6 +36,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 
 const PASSWORD_BYTES: &[u8] = &[42, 50, 37];
+pub const TEST_DEFAULT_FEE_RECIPIENT: Address = Address::repeat_byte(42);
 
 type E = MainnetEthSpec;
 
@@ -102,7 +103,8 @@ impl ApiTester {
             spec,
             Some(Arc::new(DoppelgangerService::new(log.clone()))),
             slot_clock,
-            executor,
+            Some(TEST_DEFAULT_FEE_RECIPIENT),
+            executor.clone(),
             log.clone(),
         ));
 
@@ -113,7 +115,7 @@ impl ApiTester {
         let initialized_validators = validator_store.initialized_validators();
 
         let context = Arc::new(Context {
-            runtime,
+            task_executor: executor,
             api_secret,
             validator_dir: Some(validator_dir.path().into()),
             validator_store: Some(validator_store.clone()),
@@ -185,7 +187,7 @@ impl ApiTester {
         missing_token_client.send_authorization_header(false);
         match func(missing_token_client).await {
             Err(ApiError::ServerMessage(ApiErrorMessage {
-                code: 400, message, ..
+                code: 401, message, ..
             })) if message.contains("missing Authorization header") => (),
             Err(other) => panic!("expected missing header error, got {:?}", other),
             Ok(_) => panic!("expected missing header error, got Ok"),
@@ -457,6 +459,8 @@ impl ApiTester {
                     url: format!("http://signer_{}.com/", i),
                     root_certificate_path: None,
                     request_timeout_ms: None,
+                    client_identity_path: None,
+                    client_identity_password: None,
                 }
             })
             .collect();
